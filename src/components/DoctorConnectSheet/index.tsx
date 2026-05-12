@@ -6,7 +6,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import Autocomplete from "@/components/ui/autocomplete";
 import { Button } from "@/components/ui/button";
@@ -32,46 +32,41 @@ export default function DoctorConnectSheet({
 }: DoctorConnectSheetProps) {
   const allowedOrganizations = __meta?.config?.allowed_facility_organizations;
   const allowedRoles = __meta?.config?.allowed_filter_roles;
+  const hasAllowlist = Array.isArray(allowedRoles) && allowedRoles.length > 0;
   const { t } = useTranslation(I18NNAMESPACE);
 
   const [roleSearch, setRoleSearch] = useState("");
   const [selectedRole, setSelectedRole] = useState<Role | null>(null);
 
   const { data: roles } = useQuery({
-    queryKey: ["roles", roleSearch],
-    queryFn: () => apis.roles.list({ name: roleSearch?.trim() ?? undefined }),
+    queryKey: hasAllowlist
+      ? ["roles", "restricted"]
+      : ["roles", "search", roleSearch],
+    queryFn: () => {
+      if (hasAllowlist) return apis.roles.list({ limit: 100 });
+      const trimmed = roleSearch.trim();
+      return apis.roles.list(
+        trimmed ? { name: trimmed, limit: 14 } : { limit: 14 },
+      );
+    },
   });
 
   const filteredRoles = useMemo(() => {
-    if (!roles?.results) return [];
-    if (!Array.isArray(allowedRoles) || allowedRoles.length === 0) {
-      return roles.results;
-    }
-    const allowed = allowedRoles.map((name) => name.toLowerCase());
-    return roles.results.filter((role) =>
-      allowed.includes(role.name.toLowerCase())
+    if (!hasAllowlist) return roles?.results ?? [];
+
+    const allowedSet = new Set(
+      (allowedRoles as string[]).map((n) => n.toLowerCase()),
     );
-  }, [roles, allowedRoles]);
+    const q = roleSearch.trim().toLowerCase();
+
+    return (roles?.results ?? []).filter((role) => {
+      if (!allowedSet.has(role.name.toLowerCase())) return false;
+      if (q && !role.name.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [roles, allowedRoles, hasAllowlist, roleSearch]);
 
   const filters: Filters = { role: selectedRole?.id ?? "" };
-
-  useEffect(() => {
-    const doctorRole = filteredRoles.find(
-      (role) => role.name.toLowerCase() === "doctor"
-    );
-
-    if (doctorRole && !selectedRole) {
-      setSelectedRole(doctorRole);
-    } else if (
-      !doctorRole &&
-      !selectedRole &&
-      filteredRoles.length > 0 &&
-      Array.isArray(allowedRoles) &&
-      allowedRoles.length > 0
-    ) {
-      setSelectedRole(filteredRoles[0]);
-    }
-  }, [filteredRoles, selectedRole, allowedRoles]);
 
   const roleOptions =
     [
@@ -126,12 +121,13 @@ export default function DoctorConnectSheet({
             value={selectedRole?.id}
             placeholder={t("filter_by_role")}
             onChange={(value) => {
+              setRoleSearch("");
               if (!value) {
                 setSelectedRole(null);
                 return;
               }
               const role =
-                roles?.results.find((r) => r.id === value) ??
+                filteredRoles.find((r) => r.id === value) ??
                 (selectedRole?.id === value ? selectedRole : undefined);
               if (role) {
                 setSelectedRole(role);
@@ -158,7 +154,7 @@ export default function DoctorConnectSheet({
                   return true;
                 }
                 const allowed = allowedOrganizations.map((name) =>
-                  name.toLowerCase()
+                  name.toLowerCase(),
                 );
                 return allowed.includes(organization.name.toLowerCase());
               })
